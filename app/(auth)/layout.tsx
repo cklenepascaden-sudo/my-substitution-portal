@@ -16,9 +16,9 @@ export default function AuthLayout({
         {/* Top: Portal Name */}
         <div className="relative z-20 flex items-center gap-2 text-xl font-bold tracking-tight">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-black">
-            <span className="text-lg">S</span>
+            <span className="text-lg">Automated Substitution Portal</span>
           </div>
-         PORTAL
+         PINGET NATIONAL HIGH SCHOOL
         </div>
 
         {/* Bottom: Quote/Mission */}
@@ -30,7 +30,7 @@ export default function AuthLayout({
               with administration."
             </p>
             <footer className="text-sm text-zinc-400">
-              — pORTAL
+              —Pinget National High School
             </footer>
           </blockquote>
         </div>

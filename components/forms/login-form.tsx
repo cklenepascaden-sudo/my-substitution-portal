@@ -109,7 +109,7 @@ export default function LoginForm() {
     <div className="w-full max-w-md mx-auto space-y-6 bg-white p-8 rounded-3xl border border-slate-200 shadow-2xl">
       <div className="text-center space-y-2">
         <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">
-          {isSignUp ? "Join BCNSHS" : isAdminMode ? "Admin Access" : "Faculty Login"}
+          {isSignUp ? "Automated Substitution Portal" : isAdminMode ? "Admin Access" : "Faculty Login"}
         </h1>
         <p className="text-slate-500">
           {isSignUp ? "Create your account for the substitution portal" : "Manage your classes and cover requests"}
