@@ -3,15 +3,26 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Loader2, Send, Calendar, Clock, AlertCircle } from "lucide-react";
+import { 
+  Loader2, Send, Calendar, Clock, AlertCircle, 
+  ClipboardList, Upload, FileType, CheckCircle 
+} from "lucide-react";
 
-// Define the schedule type based on our database schema
 type ScheduleBlock = {
   id: string;
   subject: string;
   time_start: string;
   time_end: string;
 };
+
+function format12Hour(time24: string) {
+  if (!time24) return "";
+  const [hourStr, minStr] = time24.split(":");
+  let hour = parseInt(hourStr, 10);
+  const ampm = hour >= 12 ? "PM" : "AM";
+  hour = hour % 12 || 12;
+  return `${hour}:${minStr} ${ampm}`;
+}
 
 export default function NewRequestPage() {
   const router = useRouter();
@@ -20,31 +31,29 @@ export default function NewRequestPage() {
   const [loading, setLoading] = useState(false);
   const [user, setUser] = useState<any>(null);
   
-  // Smart Form State
+  // Form States
   const [selectedDate, setSelectedDate] = useState("");
   const [daySchedules, setDaySchedules] = useState<ScheduleBlock[]>([]);
   const [isFetchingSchedule, setIsFetchingSchedule] = useState(false);
   const [requestType, setRequestType] = useState<"single" | "whole">("single");
   const [selectedBlockId, setSelectedBlockId] = useState("");
+  
+  // File Upload State
+  const [activityFile, setActivityFile] = useState<File | null>(null);
 
-  // 1. Get the current user on mount
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
   }, []);
 
-  // 2. Fetch the teacher's schedule whenever they pick a new date
   useEffect(() => {
     async function fetchDaySchedule() {
       if (!selectedDate || !user) return;
-      
       setIsFetchingSchedule(true);
       
-      // Convert the selected date to a Day of the Week (1 = Monday, 5 = Friday)
       const dateObj = new Date(selectedDate);
       let dayOfWeek = dateObj.getDay(); 
-      if (dayOfWeek === 0) dayOfWeek = 7; // Adjust Sunday if needed
+      if (dayOfWeek === 0) dayOfWeek = 7; 
 
-      // Query the database for classes they have on this specific day of the week
       const { data, error } = await supabase
         .from("teacher_schedules")
         .select("*")
@@ -54,15 +63,13 @@ export default function NewRequestPage() {
 
       if (!error && data) {
         setDaySchedules(data);
-        if (data.length > 0) setSelectedBlockId(data[0].id); // Default to first class
+        if (data.length > 0) setSelectedBlockId(data[0].id);
       }
       setIsFetchingSchedule(false);
     }
-
     fetchDaySchedule();
   }, [selectedDate, user]);
 
-  // 3. Handle Form Submission
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setLoading(true);
@@ -70,115 +77,123 @@ export default function NewRequestPage() {
 
     let finalSubject = "";
     let finalPeriod = "";
+    let fileUrl = null;
 
-    // Format the data based on whether they chose "Whole Day" or "Specific Class"
-    if (requestType === "whole") {
-      finalSubject = "All Classes (Whole Day)";
-      finalPeriod = "Whole Day";
-    } else {
-      const selectedClass = daySchedules.find(s => s.id === selectedBlockId);
-      if (selectedClass) {
-        finalSubject = selectedClass.subject;
-        finalPeriod = `${selectedClass.time_start.slice(0,5)} - ${selectedClass.time_end.slice(0,5)}`;
+    try {
+      // 1. UPLOAD FILE TO SUPABASE STORAGE (IF FILE EXISTS)
+      if (activityFile) {
+        const fileExt = activityFile.name.split('.').pop();
+        const fileName = `${user.id}-${Date.now()}.${fileExt}`;
+        const filePath = `${fileName}`;
+
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('sub-activities')
+          .upload(filePath, activityFile);
+
+        if (uploadError) throw new Error("File upload failed: " + uploadError.message);
+
+        const { data: { publicUrl } } = supabase.storage
+          .from('sub-activities')
+          .getPublicUrl(filePath);
+        
+        fileUrl = publicUrl;
       }
-    }
 
-    // Insert into the requests table
-    const { error } = await supabase.from("requests").insert({
-      teacher_id: user?.id,
-      date_needed: selectedDate,
-      subject: finalSubject,
-      period: finalPeriod,
-      reason: formData.get("reason"),
-      status: "pending" // Admin will review this
-    });
+      // 2. PREPARE DATA
+      if (requestType === "whole") {
+        finalSubject = "All Classes (Whole Day)";
+        finalPeriod = "Whole Day";
+      } else {
+        const selectedClass = daySchedules.find(s => s.id === selectedBlockId);
+        if (selectedClass) {
+          finalSubject = selectedClass.subject;
+          finalPeriod = `${format12Hour(selectedClass.time_start)} - ${format12Hour(selectedClass.time_end)}`;
+        }
+      }
 
-    if (!error) {
+      // 3. INSERT INTO DATABASE
+      const { error: dbError } = await supabase.from("requests").insert({
+        teacher_id: user?.id,
+        date_needed: selectedDate,
+        subject: finalSubject,
+        period: finalPeriod,
+        reason: formData.get("reason"),
+        activity_details: formData.get("activity_details"),
+        activity_file_url: fileUrl, // 👈 Saved Public URL
+        status: "pending"
+      });
+
+      if (dbError) throw dbError;
+
       router.push("/teacher/history");
-    } else {
-      alert("Error submitting request: " + error.message);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setLoading(false);
     }
-    
-    setLoading(false);
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="max-w-2xl mx-auto space-y-6 pb-20">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-slate-900">Request Substitute</h1>
-        <p className="text-slate-500 mt-1">Select a date to view your scheduled classes and request cover.</p>
+        <h1 className="text-3xl font-black tracking-tight text-slate-900">Request Substitute</h1>
+        <p className="text-slate-500 mt-1 font-medium">Notify the admin and provide instructions for your coverage.</p>
       </div>
 
-      <form onSubmit={onSubmit} className="p-6 bg-white border border-slate-200 rounded-2xl shadow-sm space-y-6">
+      <form onSubmit={onSubmit} className="p-8 bg-white border border-slate-200 rounded-[2.5rem] shadow-sm space-y-8">
         
         {/* Date Selection */}
         <div className="space-y-2">
-          <label className="text-sm font-medium flex items-center gap-2 text-slate-700">
-            <Calendar className="w-4 h-4 text-blue-600" />
-            Date of Absence
-          </label>
-          <input 
-            type="date" 
-            required 
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
-          />
+          <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1">Date of Absence</label>
+          <div className="relative">
+            <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-blue-600" />
+            <input 
+              type="date" 
+              required 
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="w-full pl-12 pr-4 py-3 bg-slate-50 border-none rounded-2xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" 
+            />
+          </div>
         </div>
 
-        {/* Dynamic Schedule Selection (Only shows if a date is picked) */}
+        {/* Dynamic Schedule Selection */}
         {selectedDate && (
-          <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-4">
-            
+          <div className="p-6 bg-blue-50/50 rounded-3xl border border-blue-100 space-y-4">
             {isFetchingSchedule ? (
-              <div className="flex items-center gap-2 text-sm text-slate-500">
-                <Loader2 className="w-4 h-4 animate-spin" /> Loading your schedule for this day...
+              <div className="flex items-center gap-2 text-sm text-blue-600 font-bold">
+                <Loader2 className="w-4 h-4 animate-spin" /> Fetching your classes...
               </div>
             ) : daySchedules.length === 0 ? (
-              <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 p-3 rounded-lg border border-amber-200">
-                <AlertCircle className="w-4 h-4" />
-                You do not have any classes scheduled for this day of the week.
+              <div className="flex items-center gap-2 text-sm text-amber-600 font-bold">
+                <AlertCircle className="w-4 h-4" /> No classes found for this day.
               </div>
             ) : (
               <>
-                <label className="text-sm font-medium flex items-center gap-2 text-slate-700">
-                  <Clock className="w-4 h-4 text-blue-600" />
-                  Coverage Needed
+                <label className="text-[10px] font-black uppercase tracking-widest text-blue-600 flex items-center gap-2">
+                  <Clock size={14} /> Select Coverage Scope
                 </label>
                 
                 <div className="flex gap-4">
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input 
-                      type="radio" 
-                      name="coverageType" 
-                      checked={requestType === "single"} 
-                      onChange={() => setRequestType("single")}
-                      className="text-blue-600 focus:ring-blue-500"
-                    />
-                    Specific Class
+                  <label className="flex-1 flex items-center gap-3 p-3 bg-white rounded-xl border border-blue-100 cursor-pointer hover:border-blue-300 transition-all">
+                    <input type="radio" name="coverageType" checked={requestType === "single"} onChange={() => setRequestType("single")} className="text-blue-600" />
+                    <span className="text-xs font-bold text-slate-700">Specific Class</span>
                   </label>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input 
-                      type="radio" 
-                      name="coverageType" 
-                      checked={requestType === "whole"} 
-                      onChange={() => setRequestType("whole")}
-                      className="text-blue-600 focus:ring-blue-500"
-                    />
-                    Whole Day Leave
+                  <label className="flex-1 flex items-center gap-3 p-3 bg-white rounded-xl border border-blue-100 cursor-pointer hover:border-blue-300 transition-all">
+                    <input type="radio" name="coverageType" checked={requestType === "whole"} onChange={() => setRequestType("whole")} className="text-blue-600" />
+                    <span className="text-xs font-bold text-slate-700">Whole Day</span>
                   </label>
                 </div>
 
-                {/* Dropdown for specific class selection */}
                 {requestType === "single" && (
                   <select 
                     value={selectedBlockId}
                     onChange={(e) => setSelectedBlockId(e.target.value)}
-                    className="w-full p-2.5 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full p-3 bg-white border border-blue-100 rounded-xl text-xs font-black text-slate-700 outline-none"
                   >
                     {daySchedules.map((cls) => (
                       <option key={cls.id} value={cls.id}>
-                        {cls.time_start.slice(0,5)} - {cls.time_end.slice(0,5)} | {cls.subject}
+                        {format12Hour(cls.time_start)} — {cls.subject}
                       </option>
                     ))}
                   </select>
@@ -188,24 +203,53 @@ export default function NewRequestPage() {
           </div>
         )}
 
-        {/* Reason for Absence */}
+        {/* FILE UPLOAD SECTION */}
         <div className="space-y-2">
-          <label className="text-sm font-medium text-slate-700">Reason</label>
+          <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1 flex items-center gap-2">
+            <Upload size={14} className="text-blue-500" /> Activity File (PDF / Images)
+          </label>
+          <div className="relative group">
+            <input 
+              type="file" 
+              accept=".pdf,.png,.jpg,.jpeg"
+              onChange={(e) => setActivityFile(e.target.files?.[0] || null)}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+            />
+            <div className="w-full p-6 bg-slate-50 border-2 border-dashed border-slate-200 rounded-[1.5rem] flex flex-col items-center justify-center gap-2 group-hover:border-blue-400 transition-all">
+              {activityFile ? (
+                <>
+                  <CheckCircle className="text-green-500" size={24} />
+                  <span className="text-sm font-bold text-slate-700">{activityFile.name}</span>
+                </>
+              ) : (
+                <>
+                  <FileType className="text-slate-300" size={24} />
+                  <span className="text-xs font-bold text-slate-400">Click to upload worksheet</span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ACTIVITY DETAILS */}
+        <div className="space-y-2">
+          <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 ml-1 flex items-center gap-2">
+            <ClipboardList size={14} className="text-blue-500" /> Lesson Instructions
+          </label>
           <textarea 
-            name="reason" 
-            rows={3} 
+            name="activity_details" 
+            rows={4} 
             required
-            placeholder="Please provide a brief reason for your absence..." 
-            className="w-full p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none" 
+            placeholder="Detailed instructions for the substitute..." 
+            className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none resize-none" 
           />
         </div>
 
-        {/* Submit Button */}
         <button 
           disabled={loading || (selectedDate !== "" && daySchedules.length === 0)} 
-          className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-blue-700 disabled:opacity-50 disabled:bg-slate-400 transition-colors shadow-sm"
+          className="w-full bg-slate-900 text-white py-4 rounded-[1.5rem] font-black text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-2 hover:bg-blue-600 transition-all shadow-xl disabled:opacity-50"
         >
-          {loading ? <Loader2 className="animate-spin" /> : <><Send size={18} /> Submit Request to Admin</>}
+          {loading ? <Loader2 className="animate-spin" /> : <><Send size={16} /> Submit Request</>}
         </button>
       </form>
     </div>
